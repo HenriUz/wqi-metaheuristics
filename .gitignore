@@ -1,0 +1,6 @@
+cache/
+__pycache__/
+data/cache/
+data/dem/reprojected_*.tif
+.venv/
+venv/

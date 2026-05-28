@@ -1,7 +1,23 @@
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+import numpy as np
 import pandas as pd
+
+
+@dataclass(frozen=True)
+class ObjectiveStateND:
+    """Precompiled numeric state for low-overhead candidate evaluation."""
+    h3_ids: List[str]
+    h3_to_index: Dict[str, int]
+    candidate_dimensions: List[str]
+    dimension_to_index: Dict[str, int]
+    indicator_columns: List[str]
+    candidate_to_indicator_indices: np.ndarray
+    base_indicator_matrix: np.ndarray
+    source_indices: np.ndarray
+    target_indices: np.ndarray
+    alpha_values: np.ndarray
 
 
 @dataclass
@@ -18,3 +34,4 @@ class MetaheuristicContext:
     source_hex_ids: List[str]
     baseline_iqc_total: Optional[float]
     allocations: List[Dict[str, object]]
+    objective_state_nd: Optional[ObjectiveStateND] = None

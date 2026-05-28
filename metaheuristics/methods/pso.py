@@ -1,4 +1,8 @@
-from ..core import objective_function_with_time
+from ..core import (
+    allocation_items_to_candidate_matrix,
+    evaluate_candidate_matrix_nd,
+    objective_function_with_time,
+)
 from ..core.types import MetaheuristicContext
 
 
@@ -13,12 +17,22 @@ def run_pso(context: MetaheuristicContext) -> dict:
         }
 
     first_candidate = context.allocations[0]
-    eval_result = objective_function_with_time(
-        df_walkability=context.df_walkability,
-        df_hex_time_matrix=context.df_hex_time_matrix,
-        allocation_items=first_candidate['allocation'],
-        candidate_dimensions=context.dimensions,
-    )
+    if context.objective_state_nd is not None:
+        candidate_matrix = allocation_items_to_candidate_matrix(
+            allocation_items=first_candidate['allocation'],
+            objective_state=context.objective_state_nd,
+        )
+        eval_result = evaluate_candidate_matrix_nd(
+            candidate_matrix=candidate_matrix,
+            objective_state=context.objective_state_nd,
+        )
+    else:
+        eval_result = objective_function_with_time(
+            df_walkability=context.df_walkability,
+            df_hex_time_matrix=context.df_hex_time_matrix,
+            allocation_items=first_candidate['allocation'],
+            candidate_dimensions=context.dimensions,
+        )
 
     return {
         'method_code': context.method_code,

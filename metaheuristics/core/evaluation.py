@@ -1,9 +1,11 @@
 import math
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from walkability.iqc import calculate_walkability_index
+from .types import ObjectiveStateND
 
 
 ID_COLUMNS = ['h3_id', 'latitude', 'longitude']
@@ -264,3 +266,254 @@ def objective_function_with_time(df_walkability: pd.DataFrame,
     eval_result = objective_function(df_candidate)
     eval_result['applied_allocation_size'] = len(allocation_list)
     return eval_result
+
+
+def build_objective_state_nd(df_walkability: pd.DataFrame,
+                             df_hex_time_matrix: pd.DataFrame,
+                             candidate_dimensions: Iterable[str],
+                             max_time: float = 20.0) -> ObjectiveStateND:
+    """
+    Precompile numeric structures used by the ndarray objective function.
+
+    This should run once per optimization execution. Candidate evaluation
+    should then use `evaluate_candidate_matrix_nd(...)`.
+    """
+    if df_walkability is None or df_walkability.empty:
+        raise ValueError("df_walkability is empty.")
+    if 'h3_id' not in df_walkability.columns:
+        raise ValueError("df_walkability is missing required column 'h3_id'.")
+
+    df_base = df_walkability.copy()
+    df_base['h3_id'] = df_base['h3_id'].astype(str)
+    if df_base['h3_id'].duplicated().any():
+        df_base = df_base.drop_duplicates(subset=['h3_id'], keep='first').reset_index(drop=True)
+
+    indicator_columns = [col for col in CORE_INDICATOR_COLUMNS if col in df_base.columns]
+    if not indicator_columns:
+        raise ValueError("df_walkability has no core indicator columns for ndarray objective.")
+
+    for col in indicator_columns:
+        df_base[col] = pd.to_numeric(df_base[col], errors='coerce')
+    df_base[indicator_columns] = df_base[indicator_columns].fillna(0.0)
+
+    candidate_dims = [str(dim) for dim in candidate_dimensions if str(dim) in indicator_columns]
+    if not candidate_dims:
+        raise ValueError("No candidate POI dimensions found for ndarray objective.")
+
+    h3_ids = df_base['h3_id'].tolist()
+    h3_to_index = {h3_id: idx for idx, h3_id in enumerate(h3_ids)}
+
+    candidate_to_indicator_indices = np.asarray(
+        [indicator_columns.index(dim) for dim in candidate_dims],
+        dtype=np.int32,
+    )
+    dimension_to_index = {dim: idx for idx, dim in enumerate(candidate_dims)}
+
+    base_indicator_matrix = df_base[indicator_columns].to_numpy(dtype=np.float64, copy=True)
+
+    df_matrix = validate_hex_time_matrix(df_hex_time_matrix, max_time=max_time)
+
+    source_hex = df_matrix['source_h3_id'].astype(str).to_numpy()
+    target_hex = df_matrix['target_h3_id'].astype(str).to_numpy()
+    alpha_values_raw = pd.to_numeric(df_matrix['alpha_20'], errors='coerce').fillna(0.0).to_numpy(dtype=np.float64)
+
+    valid_rows_mask = np.asarray(
+        [(src in h3_to_index) and (tgt in h3_to_index) for src, tgt in zip(source_hex, target_hex)],
+        dtype=bool,
+    )
+    if not valid_rows_mask.any():
+        raise ValueError("No source-target rows in hex-time matrix map to df_walkability h3_id values.")
+
+    source_indices = np.asarray([h3_to_index[src] for src in source_hex[valid_rows_mask]], dtype=np.int32)
+    target_indices = np.asarray([h3_to_index[tgt] for tgt in target_hex[valid_rows_mask]], dtype=np.int32)
+    alpha_values = alpha_values_raw[valid_rows_mask].astype(np.float64, copy=False)
+
+    return ObjectiveStateND(
+        h3_ids=h3_ids,
+        h3_to_index=h3_to_index,
+        candidate_dimensions=candidate_dims,
+        dimension_to_index=dimension_to_index,
+        indicator_columns=indicator_columns,
+        candidate_to_indicator_indices=candidate_to_indicator_indices,
+        base_indicator_matrix=base_indicator_matrix,
+        source_indices=source_indices,
+        target_indices=target_indices,
+        alpha_values=alpha_values,
+    )
+
+
+def allocation_items_to_candidate_matrix(allocation_items: Iterable[Dict[str, object]],
+                                         objective_state: ObjectiveStateND) -> np.ndarray:
+    """
+    Convert allocation items into candidate matrix.
+
+    Output matrix shape is `(n_hex, n_candidate_dimensions)` where each row is
+    the internal sequential index of the hexagon.
+    """
+    n_hex = len(objective_state.h3_ids)
+    n_dims = len(objective_state.candidate_dimensions)
+    candidate_matrix = np.zeros((n_hex, n_dims), dtype=np.float64)
+
+    if allocation_items is None:
+        return candidate_matrix
+
+    for item in allocation_items:
+        if not isinstance(item, dict):
+            raise ValueError("Each allocation item must be a dictionary.")
+        missing_fields = [field for field in ['h3_id', 'dimension', 'quantity'] if field not in item]
+        if missing_fields:
+            raise ValueError(f"Allocation item is missing required fields: {missing_fields}")
+
+        h3_id = str(item['h3_id'])
+        dimension = str(item['dimension'])
+        quantity_raw = item['quantity']
+
+        if h3_id not in objective_state.h3_to_index:
+            continue
+        if dimension not in objective_state.dimension_to_index:
+            continue
+
+        try:
+            quantity = float(quantity_raw)
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0:
+            continue
+
+        row_idx = objective_state.h3_to_index[h3_id]
+        col_idx = objective_state.dimension_to_index[dimension]
+        candidate_matrix[row_idx, col_idx] += quantity
+
+    return candidate_matrix
+
+
+def _compute_critic_weights_numpy(indicator_matrix: np.ndarray) -> np.ndarray:
+    """Numpy implementation of CRITIC weights compatible with current pipeline."""
+    if indicator_matrix.ndim != 2:
+        raise ValueError("indicator_matrix must be a 2D array.")
+
+    n_rows, n_cols = indicator_matrix.shape
+    if n_cols == 0:
+        raise ValueError("indicator_matrix has zero columns.")
+    if n_rows == 0:
+        raise ValueError("indicator_matrix has zero rows.")
+
+    col_min = indicator_matrix.min(axis=0)
+    col_max = indicator_matrix.max(axis=0)
+    col_range = col_max - col_min
+
+    df_norm = np.zeros_like(indicator_matrix, dtype=np.float64)
+    non_zero_range = col_range > 0
+    if non_zero_range.any():
+        df_norm[:, non_zero_range] = (
+            (indicator_matrix[:, non_zero_range] - col_min[non_zero_range]) / col_range[non_zero_range]
+        )
+
+    ddof = 1 if n_rows > 1 else 0
+    std_dev = df_norm.std(axis=0, ddof=ddof)
+
+    valid_cols = np.where(non_zero_range)[0]
+    if valid_cols.size < 2:
+        return np.full(n_cols, 1.0 / float(n_cols), dtype=np.float64)
+
+    corr_matrix = np.corrcoef(indicator_matrix[:, valid_cols], rowvar=False)
+    corr_matrix = np.nan_to_num(corr_matrix, nan=0.0, posinf=0.0, neginf=0.0)
+    corr_abs = np.abs(corr_matrix)
+
+    conflict = np.zeros(n_cols, dtype=np.float64)
+    conflict[valid_cols] = (1.0 - corr_abs).sum(axis=1)
+
+    critic_measure = std_dev * conflict
+    critic_sum = float(critic_measure.sum())
+    if critic_sum > 0.0:
+        return critic_measure / critic_sum
+
+    return np.full(n_cols, 1.0 / float(n_cols), dtype=np.float64)
+
+
+def _compute_iqc_numpy(indicator_matrix: np.ndarray,
+                       critic_weights: np.ndarray) -> np.ndarray:
+    """Numpy implementation of IQC aggregation (with rounding to 4 decimals)."""
+    if indicator_matrix.ndim != 2:
+        raise ValueError("indicator_matrix must be a 2D array.")
+    if critic_weights.ndim != 1:
+        raise ValueError("critic_weights must be a 1D array.")
+    if indicator_matrix.shape[1] != critic_weights.shape[0]:
+        raise ValueError("critic_weights size does not match indicator_matrix columns.")
+
+    col_min = indicator_matrix.min(axis=0)
+    col_max = indicator_matrix.max(axis=0)
+    col_range = col_max - col_min
+
+    df_norm = np.full_like(indicator_matrix, 0.5, dtype=np.float64)
+    non_zero_range = col_range > 0
+    if non_zero_range.any():
+        df_norm[:, non_zero_range] = (
+            (indicator_matrix[:, non_zero_range] - col_min[non_zero_range]) / col_range[non_zero_range]
+        )
+
+    iqc_values = df_norm @ critic_weights
+    return np.round(iqc_values, 4)
+
+
+def evaluate_candidate_matrix_nd(candidate_matrix: np.ndarray,
+                                 objective_state: ObjectiveStateND) -> Dict[str, object]:
+    """
+    Evaluate one candidate matrix with low overhead.
+
+    Parameters
+    ----------
+    candidate_matrix:
+        2D ndarray with shape `(n_hex, n_candidate_dimensions)`.
+    objective_state:
+        Precompiled state created by `build_objective_state_nd(...)`.
+    """
+    candidate_array = np.asarray(candidate_matrix, dtype=np.float64)
+
+    n_hex = len(objective_state.h3_ids)
+    n_dims = len(objective_state.candidate_dimensions)
+    expected_shape = (n_hex, n_dims)
+
+    if candidate_array.ndim != 2:
+        raise ValueError("candidate_matrix must be a 2D ndarray.")
+    if candidate_array.shape != expected_shape:
+        raise ValueError(
+            f"candidate_matrix shape {candidate_array.shape} does not match expected {expected_shape}."
+        )
+
+    allocation_rows = candidate_array[objective_state.source_indices]
+    weighted_rows = allocation_rows * objective_state.alpha_values[:, None]
+
+    delta_by_target = np.zeros((n_hex, n_dims), dtype=np.float64)
+    np.add.at(delta_by_target, objective_state.target_indices, weighted_rows)
+
+    indicator_matrix = objective_state.base_indicator_matrix.copy()
+    indicator_matrix[:, objective_state.candidate_to_indicator_indices] += delta_by_target
+
+    critic_weights = _compute_critic_weights_numpy(indicator_matrix)
+    iqc_values = _compute_iqc_numpy(indicator_matrix, critic_weights=critic_weights)
+    objective_value = float(iqc_values.sum())
+
+    return {
+        'objective_metric': 'sum_iqc',
+        'objective_value': objective_value,
+        'optimization_direction': 'maximize',
+        'critic_weights': critic_weights,
+        'applied_allocation_size': int(np.count_nonzero(candidate_array)),
+    }
+
+
+def objective_function_with_time_nd(allocation_items: Iterable[Dict[str, object]],
+                                    objective_state: ObjectiveStateND) -> Dict[str, object]:
+    """
+    Convenience wrapper:
+    allocation list -> candidate ndarray -> low-overhead ndarray objective.
+    """
+    candidate_matrix = allocation_items_to_candidate_matrix(
+        allocation_items=allocation_items,
+        objective_state=objective_state,
+    )
+    return evaluate_candidate_matrix_nd(
+        candidate_matrix=candidate_matrix,
+        objective_state=objective_state,
+    )

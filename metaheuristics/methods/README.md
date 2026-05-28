@@ -25,6 +25,8 @@ The `context` object includes:
 - `dimensions`
 - `source_hex_ids`
 - `walking_profile`
+- `allocations`
+- `objective_state_nd` (precompiled numeric state for fast evaluation)
 - method metadata (`method_code`, `method_name`)
 
 Plain-language note:
@@ -32,46 +34,50 @@ Plain-language note:
 - Your method receives it already filled by `walk_meta_opt(...)`.
 - `context.allocations[0]` is simply the first candidate allocation generated from seeds.
 
-## Objective function (shared)
-For the spatial allocation scenario (POI insertion by source hexagon),
-evaluate candidates with:
+## Objective function (shared, ndarray entry point)
+The low-overhead objective is:
 
 ```python
-from ..core import objective_function_with_time
+from ..core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
 
-eval_result = objective_function_with_time(
-    df_walkability=context.df_walkability,
-    df_hex_time_matrix=context.df_hex_time_matrix,
+candidate_matrix = allocation_items_to_candidate_matrix(
     allocation_items=candidate_allocation,
-    candidate_dimensions=context.dimensions,
+    objective_state=context.objective_state_nd,
+)
+eval_result = evaluate_candidate_matrix_nd(
+    candidate_matrix=candidate_matrix,
+    objective_state=context.objective_state_nd,
 )
 score = eval_result["objective_value"]  # maximize
 ```
 
-This objective applies source-target temporal impact (`alpha_20`), then
-recalculates CRITIC + IQC and uses:
-- `objective_value = sum(IQC)` (global IQC)
-- `optimization_direction = "maximize"`
+This objective:
+- uses the source-target time-decay impact (`alpha_20`) precompiled outside the hot loop,
+- updates indicators using ndarray operations only,
+- recalculates CRITIC + IQC,
+- returns `objective_value = sum(IQC)` and `optimization_direction = "maximize"`.
 
 ## Minimal method skeleton
 ```python
 from ..core.types import MetaheuristicContext
-from ..core import objective_function_with_time
+from ..core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
 
 def run_ils(context: MetaheuristicContext) -> dict:
     first_candidate = context.allocations[0]
-    eval_result = objective_function_with_time(
-        df_walkability=context.df_walkability,
-        df_hex_time_matrix=context.df_hex_time_matrix,
+    candidate_matrix = allocation_items_to_candidate_matrix(
         allocation_items=first_candidate["allocation"],
-        candidate_dimensions=context.dimensions,
+        objective_state=context.objective_state_nd,
+    )
+    eval_result = evaluate_candidate_matrix_nd(
+        candidate_matrix=candidate_matrix,
+        objective_state=context.objective_state_nd,
     )
     return {
         "method_code": context.method_code,
         "method_name": context.method_name,
         "status": "ok",
         "best_objective_value": eval_result["objective_value"],
-        "message": "Baseline spatial-time evaluation executed."
+        "message": "Baseline ndarray spatial-time evaluation executed.",
     }
 ```
 
@@ -84,6 +90,6 @@ Without registration, the optimizer cannot dispatch to the method.
 
 ## Quick checklist
 - Function compiles.
-- Function uses `objective_function(...)`.
+- Function uses `evaluate_candidate_matrix_nd(...)`.
 - Method is registered in `METHOD_RUNNERS`.
 - Return dict has clear `status` and objective value.

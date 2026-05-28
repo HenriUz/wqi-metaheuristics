@@ -3,7 +3,12 @@ from typing import Dict, List
 import pandas as pd
 
 from .core.budget import POI_DIMENSION_COLUMNS, generate_random_spatial_allocations
-from .core.evaluation import compute_baseline_iqc_total, get_available_dimensions, validate_hex_time_matrix
+from .core.evaluation import (
+    build_objective_state_nd,
+    compute_baseline_iqc_total,
+    get_available_dimensions,
+    validate_hex_time_matrix,
+)
 from .core.io import load_seeds
 from .core.types import MetaheuristicContext
 from .methods import METHOD_RUNNERS
@@ -74,6 +79,11 @@ def walk_meta_opt(df_walkability: pd.DataFrame,
         raise ValueError("No common source hexagons between df_walkability and df_hex_time_matrix.")
 
     baseline_iqc_total = compute_baseline_iqc_total(df_walkability)
+    objective_state_nd = build_objective_state_nd(
+        df_walkability=df_walkability,
+        df_hex_time_matrix=df_hex_time_matrix,
+        candidate_dimensions=dimensions,
+    )
     allocations = generate_random_spatial_allocations(
         budget=budget,
         dimensions=dimensions,
@@ -93,6 +103,7 @@ def walk_meta_opt(df_walkability: pd.DataFrame,
         source_hex_ids=source_hex_ids,
         baseline_iqc_total=baseline_iqc_total,
         allocations=allocations,
+        objective_state_nd=objective_state_nd,
     )
 
     method_runner = METHOD_RUNNERS.get(method)

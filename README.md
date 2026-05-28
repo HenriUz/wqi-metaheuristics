@@ -137,6 +137,10 @@ pco212-metaheuristics/
 
 -  `objective_function_with_time(df_walkability, df_hex_time_matrix, allocation_items, candidate_dimensions)`
 
+-  `build_objective_state_nd(df_walkability, df_hex_time_matrix, candidate_dimensions)` (one-time precompilation to ndarray state)
+
+-  `evaluate_candidate_matrix_nd(candidate_matrix, objective_state)` (low-overhead objective entry point used by methods)
+
 -  `metaheuristics/core/types.py`: shared dataclass context for method implementations.
 
 -  `metaheuristics/methods/*.py`: one module per metaheuristic method implementation.
@@ -247,7 +251,9 @@ Practical result:
 
 - Implemented as `sum_iqc` (sum of IQC across all hexagons).
 
-- Use `objective_function_with_time(...)` for candidate evaluation.
+- Fast path: use `evaluate_candidate_matrix_nd(...)` with a precompiled `objective_state_nd`.
+
+- Compatibility path: `objective_function_with_time(...)` remains available.
 
   
 
@@ -305,6 +311,8 @@ The `context` object (from `metaheuristics/core/types.py`) provides:
 
 -  `allocations`: initial random allocations generated from seeds.
 
+-  `objective_state_nd`: precompiled numeric objective state (`h3_id -> index`, base indicator matrix, source-target alpha arrays).
+
 Plain-language note (no OOP background required):
 
 - `MetaheuristicContext` is just a "data package" created before your method starts.
@@ -325,24 +333,29 @@ All methods must evaluate candidate solutions with:
 
 ```python
 
-from metaheuristics.core import objective_function_with_time
+from metaheuristics.core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
 
   
 
-result = objective_function_with_time(
-    df_walkability=df_walkability,
-    df_hex_time_matrix=df_hex_time_matrix,
+candidate_matrix = allocation_items_to_candidate_matrix(
     allocation_items=allocation_items,
-    candidate_dimensions=dimensions,
+    objective_state=context.objective_state_nd,
+)
+
+result = evaluate_candidate_matrix_nd(
+    candidate_matrix=candidate_matrix,
+    objective_state=context.objective_state_nd,
 )
 
 ```
 
   
 
-`objective_function_with_time(...)`:
+`evaluate_candidate_matrix_nd(...)`:
 
-- applies source-target spatial-time impact using `alpha_20`,
+- expects only an ndarray candidate matrix in the hot loop,
+
+- applies source-target spatial-time impact using precompiled `alpha_20` arrays,
 
 - recalculates CRITIC weights,
 
@@ -418,7 +431,7 @@ Without registration, the optimizer cannot dispatch to the method.
 
 from ..core.types import MetaheuristicContext
 
-from ..core import objective_function_with_time
+from ..core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
 
   
 
@@ -426,11 +439,14 @@ def run_ils(context: MetaheuristicContext) -> dict:
 
 first_candidate = context.allocations[0]
 
-eval_result = objective_function_with_time(
-    df_walkability=context.df_walkability,
-    df_hex_time_matrix=context.df_hex_time_matrix,
+candidate_matrix = allocation_items_to_candidate_matrix(
     allocation_items=first_candidate["allocation"],
-    candidate_dimensions=context.dimensions,
+    objective_state=context.objective_state_nd,
+)
+
+eval_result = evaluate_candidate_matrix_nd(
+    candidate_matrix=candidate_matrix,
+    objective_state=context.objective_state_nd,
 )
 
 return {

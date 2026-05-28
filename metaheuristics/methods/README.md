@@ -29,6 +29,11 @@ The `context` object includes:
 - `objective_state_nd` (precompiled numeric state for fast evaluation)
 - method metadata (`method_code`, `method_name`)
 
+What `objective_state_nd` is:
+- One-time compiled state created before the optimization loop.
+- Contains sequential hex indexing, base indicator matrix, dimension mapping, and precompiled source-target `alpha` impacts.
+- Lets `objective_function(candidate_matrix=..., objective_state=...)` run with ndarray operations only in the hot loop.
+
 Plain-language note:
 - `MetaheuristicContext` is only a container with prepared inputs.
 - Your method receives it already filled by `walk_meta_opt(...)`.

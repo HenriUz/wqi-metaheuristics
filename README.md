@@ -313,6 +313,12 @@ The `context` object (from `metaheuristics/core/types.py`) provides:
 
 -  `objective_state_nd`: precompiled numeric objective state (`h3_id -> index`, base indicator matrix, source-target alpha arrays).
 
+What `objective_state_nd` is:
+- It is the one-time compiled representation of optimization inputs for fast objective evaluation.
+- It stores: sequential hex indexing (`h3_id -> idx`), base indicator matrix (`X_base`), dimension indexing, and source-target impact arrays (`source_idx`, `target_idx`, `alpha`).
+- It is built once by `build_objective_state_nd(...)` before the metaheuristic loop.
+- The objective function hot loop then receives only `candidate_matrix` + `objective_state_nd`, avoiding dataframe `merge/groupby/pivot` overhead.
+
 Plain-language note (no OOP background required):
 
 - `MetaheuristicContext` is just a "data package" created before your method starts.

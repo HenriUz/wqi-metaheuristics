@@ -133,13 +133,13 @@ pco212-metaheuristics/
 
 -  `recalculate_iqc_and_critic(df_final)`
 
--  `objective_function(df_final)` (global IQC sum for an already-updated dataframe)
+-  `objective_function(...)` (official objective entry point: dataframe mode and ndarray mode)
 
 -  `objective_function_with_time(df_walkability, df_hex_time_matrix, allocation_items, candidate_dimensions)`
 
 -  `build_objective_state_nd(df_walkability, df_hex_time_matrix, candidate_dimensions)` (one-time precompilation to ndarray state)
 
--  `evaluate_candidate_matrix_nd(candidate_matrix, objective_state)` (low-overhead objective entry point used by methods)
+-  `evaluate_candidate_matrix_nd(candidate_matrix, objective_state)` (compatibility wrapper for ndarray objective calls)
 
 -  `metaheuristics/core/types.py`: shared dataclass context for method implementations.
 
@@ -251,7 +251,7 @@ Practical result:
 
 - Implemented as `sum_iqc` (sum of IQC across all hexagons).
 
-- Fast path: use `evaluate_candidate_matrix_nd(...)` with a precompiled `objective_state_nd`.
+- Fast path: use `objective_function(candidate_matrix=..., objective_state=...)` with a precompiled `objective_state_nd`.
 
 - Compatibility path: `objective_function_with_time(...)` remains available.
 
@@ -333,7 +333,7 @@ All methods must evaluate candidate solutions with:
 
 ```python
 
-from metaheuristics.core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
+from metaheuristics.core import allocation_items_to_candidate_matrix, objective_function
 
   
 
@@ -342,7 +342,7 @@ candidate_matrix = allocation_items_to_candidate_matrix(
     objective_state=context.objective_state_nd,
 )
 
-result = evaluate_candidate_matrix_nd(
+result = objective_function(
     candidate_matrix=candidate_matrix,
     objective_state=context.objective_state_nd,
 )
@@ -351,7 +351,7 @@ result = evaluate_candidate_matrix_nd(
 
   
 
-`evaluate_candidate_matrix_nd(...)`:
+`objective_function(candidate_matrix=..., objective_state=...)`:
 
 - expects only an ndarray candidate matrix in the hot loop,
 
@@ -431,7 +431,7 @@ Without registration, the optimizer cannot dispatch to the method.
 
 from ..core.types import MetaheuristicContext
 
-from ..core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
+from ..core import allocation_items_to_candidate_matrix, objective_function
 
   
 
@@ -444,7 +444,7 @@ candidate_matrix = allocation_items_to_candidate_matrix(
     objective_state=context.objective_state_nd,
 )
 
-eval_result = evaluate_candidate_matrix_nd(
+eval_result = objective_function(
     candidate_matrix=candidate_matrix,
     objective_state=context.objective_state_nd,
 )

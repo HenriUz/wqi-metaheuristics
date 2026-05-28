@@ -227,12 +227,8 @@ def recalculate_iqc_and_critic(df_final: pd.DataFrame) -> Tuple[pd.DataFrame, pd
     return df_updated, critic_weights
 
 
-def objective_function(df_final: pd.DataFrame) -> Dict[str, object]:
-    """
-    Common objective function for all metaheuristic methods.
-
-    Recomputes CRITIC weights and IQC first, then returns an objective scalar.
-    """
+def _objective_function_from_dataframe(df_final: pd.DataFrame) -> Dict[str, object]:
+    """Legacy dataframe objective: recompute IQC then return global sum."""
     df_updated, critic_weights = recalculate_iqc_and_critic(df_final)
 
     objective_value = float(df_updated['IQC'].sum())
@@ -244,6 +240,30 @@ def objective_function(df_final: pd.DataFrame) -> Dict[str, object]:
         'df_final_updated': df_updated,
         'critic_weights': critic_weights,
     }
+
+
+def objective_function(df_final: Optional[pd.DataFrame] = None,
+                       *,
+                       candidate_matrix: Optional[np.ndarray] = None,
+                       objective_state: Optional[ObjectiveStateND] = None) -> Dict[str, object]:
+    """
+    Official objective function entry point.
+
+    Supported inputs:
+    - dataframe mode: `objective_function(df_final=...)` or positional `objective_function(df_final)`
+    - ndarray mode: `objective_function(candidate_matrix=..., objective_state=...)`
+    """
+    if candidate_matrix is not None or objective_state is not None:
+        if candidate_matrix is None or objective_state is None:
+            raise ValueError("For ndarray objective, provide both candidate_matrix and objective_state.")
+        return _objective_function_from_candidate_matrix(
+            candidate_matrix=candidate_matrix,
+            objective_state=objective_state,
+        )
+
+    if df_final is None:
+        raise ValueError("df_final is required when candidate_matrix/objective_state are not provided.")
+    return _objective_function_from_dataframe(df_final)
 
 
 def objective_function_with_time(df_walkability: pd.DataFrame,
@@ -263,7 +283,7 @@ def objective_function_with_time(df_walkability: pd.DataFrame,
         candidate_dimensions=candidate_dimensions,
         max_time=max_time,
     )
-    eval_result = objective_function(df_candidate)
+    eval_result = objective_function(df_final=df_candidate)
     eval_result['applied_allocation_size'] = len(allocation_list)
     return eval_result
 
@@ -276,7 +296,7 @@ def build_objective_state_nd(df_walkability: pd.DataFrame,
     Precompile numeric structures used by the ndarray objective function.
 
     This should run once per optimization execution. Candidate evaluation
-    should then use `evaluate_candidate_matrix_nd(...)`.
+    should then use `objective_function(candidate_matrix=..., objective_state=...)`.
     """
     if df_walkability is None or df_walkability.empty:
         raise ValueError("df_walkability is empty.")
@@ -456,18 +476,9 @@ def _compute_iqc_numpy(indicator_matrix: np.ndarray,
     return np.round(iqc_values, 4)
 
 
-def evaluate_candidate_matrix_nd(candidate_matrix: np.ndarray,
-                                 objective_state: ObjectiveStateND) -> Dict[str, object]:
-    """
-    Evaluate one candidate matrix with low overhead.
-
-    Parameters
-    ----------
-    candidate_matrix:
-        2D ndarray with shape `(n_hex, n_candidate_dimensions)`.
-    objective_state:
-        Precompiled state created by `build_objective_state_nd(...)`.
-    """
+def _objective_function_from_candidate_matrix(candidate_matrix: np.ndarray,
+                                              objective_state: ObjectiveStateND) -> Dict[str, object]:
+    """Ndarray objective: apply impacts, recompute CRITIC+IQC, return global IQC sum."""
     candidate_array = np.asarray(candidate_matrix, dtype=np.float64)
 
     n_hex = len(objective_state.h3_ids)
@@ -503,6 +514,19 @@ def evaluate_candidate_matrix_nd(candidate_matrix: np.ndarray,
     }
 
 
+def evaluate_candidate_matrix_nd(candidate_matrix: np.ndarray,
+                                 objective_state: ObjectiveStateND) -> Dict[str, object]:
+    """
+    Compatibility wrapper for ndarray objective calls.
+
+    Preferred public name is `objective_function(candidate_matrix=..., objective_state=...)`.
+    """
+    return objective_function(
+        candidate_matrix=candidate_matrix,
+        objective_state=objective_state,
+    )
+
+
 def objective_function_with_time_nd(allocation_items: Iterable[Dict[str, object]],
                                     objective_state: ObjectiveStateND) -> Dict[str, object]:
     """
@@ -513,7 +537,7 @@ def objective_function_with_time_nd(allocation_items: Iterable[Dict[str, object]
         allocation_items=allocation_items,
         objective_state=objective_state,
     )
-    return evaluate_candidate_matrix_nd(
+    return objective_function(
         candidate_matrix=candidate_matrix,
         objective_state=objective_state,
     )

@@ -1,6 +1,6 @@
 from ..core import (
     allocation_items_to_candidate_matrix,
-    evaluate_candidate_matrix_nd,
+    objective_function,
     objective_function_with_time,
 )
 from ..core.types import MetaheuristicContext
@@ -22,7 +22,7 @@ def run_grasp(context: MetaheuristicContext) -> dict:
             allocation_items=first_candidate['allocation'],
             objective_state=context.objective_state_nd,
         )
-        eval_result = evaluate_candidate_matrix_nd(
+        eval_result = objective_function(
             candidate_matrix=candidate_matrix,
             objective_state=context.objective_state_nd,
         )

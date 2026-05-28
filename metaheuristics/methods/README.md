@@ -38,13 +38,13 @@ Plain-language note:
 The low-overhead objective is:
 
 ```python
-from ..core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
+from ..core import allocation_items_to_candidate_matrix, objective_function
 
 candidate_matrix = allocation_items_to_candidate_matrix(
     allocation_items=candidate_allocation,
     objective_state=context.objective_state_nd,
 )
-eval_result = evaluate_candidate_matrix_nd(
+eval_result = objective_function(
     candidate_matrix=candidate_matrix,
     objective_state=context.objective_state_nd,
 )
@@ -60,7 +60,7 @@ This objective:
 ## Minimal method skeleton
 ```python
 from ..core.types import MetaheuristicContext
-from ..core import allocation_items_to_candidate_matrix, evaluate_candidate_matrix_nd
+from ..core import allocation_items_to_candidate_matrix, objective_function
 
 def run_ils(context: MetaheuristicContext) -> dict:
     first_candidate = context.allocations[0]
@@ -68,7 +68,7 @@ def run_ils(context: MetaheuristicContext) -> dict:
         allocation_items=first_candidate["allocation"],
         objective_state=context.objective_state_nd,
     )
-    eval_result = evaluate_candidate_matrix_nd(
+    eval_result = objective_function(
         candidate_matrix=candidate_matrix,
         objective_state=context.objective_state_nd,
     )
@@ -90,6 +90,6 @@ Without registration, the optimizer cannot dispatch to the method.
 
 ## Quick checklist
 - Function compiles.
-- Function uses `evaluate_candidate_matrix_nd(...)`.
+- Function uses `objective_function(candidate_matrix=..., objective_state=...)`.
 - Method is registered in `METHOD_RUNNERS`.
 - Return dict has clear `status` and objective value.

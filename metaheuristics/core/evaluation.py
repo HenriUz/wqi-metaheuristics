@@ -266,28 +266,6 @@ def objective_function(df_final: Optional[pd.DataFrame] = None,
     return _objective_function_from_dataframe(df_final)
 
 
-def objective_function_with_time(df_walkability: pd.DataFrame,
-                                 df_hex_time_matrix: pd.DataFrame,
-                                 allocation_items: Iterable[Dict[str, object]],
-                                 candidate_dimensions: Iterable[str],
-                                 max_time: float = 20.0) -> Dict[str, object]:
-    """
-    Apply spatial allocation with time decay, then evaluate objective.
-    """
-    allocation_list = list(allocation_items) if allocation_items is not None else []
-
-    df_candidate = apply_spatial_allocation_with_time(
-        df_walkability=df_walkability,
-        df_hex_time_matrix=df_hex_time_matrix,
-        allocation_items=allocation_list,
-        candidate_dimensions=candidate_dimensions,
-        max_time=max_time,
-    )
-    eval_result = objective_function(df_final=df_candidate)
-    eval_result['applied_allocation_size'] = len(allocation_list)
-    return eval_result
-
-
 def build_objective_state_nd(df_walkability: pd.DataFrame,
                              df_hex_time_matrix: pd.DataFrame,
                              candidate_dimensions: Iterable[str],
@@ -329,7 +307,7 @@ def build_objective_state_nd(df_walkability: pd.DataFrame,
     )
     dimension_to_index = {dim: idx for idx, dim in enumerate(candidate_dims)}
 
-    base_indicator_matrix = df_base[indicator_columns].to_numpy(dtype=np.float64, copy=True)
+    baseline_matrix = df_base[indicator_columns].to_numpy(dtype=np.float64, copy=True)
 
     df_matrix = validate_hex_time_matrix(df_hex_time_matrix, max_time=max_time)
 
@@ -355,7 +333,7 @@ def build_objective_state_nd(df_walkability: pd.DataFrame,
         dimension_to_index=dimension_to_index,
         indicator_columns=indicator_columns,
         candidate_to_indicator_indices=candidate_to_indicator_indices,
-        base_indicator_matrix=base_indicator_matrix,
+        baseline_matrix=baseline_matrix,
         source_indices=source_indices,
         target_indices=target_indices,
         alpha_values=alpha_values,
@@ -498,7 +476,7 @@ def _objective_function_from_candidate_matrix(candidate_matrix: np.ndarray,
     delta_by_target = np.zeros((n_hex, n_dims), dtype=np.float64)
     np.add.at(delta_by_target, objective_state.target_indices, weighted_rows)
 
-    indicator_matrix = objective_state.base_indicator_matrix.copy()
+    indicator_matrix = objective_state.baseline_matrix.copy()
     indicator_matrix[:, objective_state.candidate_to_indicator_indices] += delta_by_target
 
     critic_weights = _compute_critic_weights_numpy(indicator_matrix)

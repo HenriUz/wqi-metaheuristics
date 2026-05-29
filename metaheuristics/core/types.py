@@ -14,10 +14,15 @@ class ObjectiveStateND:
     dimension_to_index: Dict[str, int]
     indicator_columns: List[str]
     candidate_to_indicator_indices: np.ndarray
-    base_indicator_matrix: np.ndarray
+    baseline_matrix: np.ndarray
     source_indices: np.ndarray
     target_indices: np.ndarray
     alpha_values: np.ndarray
+
+    @property
+    def base_indicator_matrix(self) -> np.ndarray:
+        """Backward-compatible alias for baseline_matrix."""
+        return self.baseline_matrix
 
 
 @dataclass

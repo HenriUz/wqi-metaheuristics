@@ -135,8 +135,6 @@ pco212-metaheuristics/
 
 -  `objective_function(...)` (official objective entry point: dataframe mode and ndarray mode)
 
--  `objective_function_with_time(df_walkability, df_hex_time_matrix, allocation_items, candidate_dimensions)`
-
 -  `build_objective_state_nd(df_walkability, df_hex_time_matrix, candidate_dimensions)` (one-time precompilation to ndarray state)
 
 -  `evaluate_candidate_matrix_nd(candidate_matrix, objective_state)` (compatibility wrapper for ndarray objective calls)
@@ -253,7 +251,6 @@ Practical result:
 
 - Fast path: use `objective_function(candidate_matrix=..., objective_state=...)` with a precompiled `objective_state_nd`.
 
-- Compatibility path: `objective_function_with_time(...)` remains available.
 
   
 
@@ -311,11 +308,11 @@ The `context` object (from `metaheuristics/core/types.py`) provides:
 
 -  `allocations`: initial random allocations generated from seeds.
 
--  `objective_state_nd`: precompiled numeric objective state (`h3_id -> index`, base indicator matrix, source-target alpha arrays).
+-  `objective_state_nd`: precompiled numeric objective state (`h3_id -> index`, `baseline_matrix`, source-target alpha arrays).
 
 What `objective_state_nd` is:
 - It is the one-time compiled representation of optimization inputs for fast objective evaluation.
-- It stores: sequential hex indexing (`h3_id -> idx`), base indicator matrix (`X_base`), dimension indexing, and source-target impact arrays (`source_idx`, `target_idx`, `alpha`).
+- It stores: sequential hex indexing (`h3_id -> idx`), `baseline_matrix`, dimension indexing, and source-target impact arrays (`source_idx`, `target_idx`, `alpha`).
 - It is built once by `build_objective_state_nd(...)` before the metaheuristic loop.
 - The objective function hot loop then receives only `candidate_matrix` + `objective_state_nd`, avoiding dataframe `merge/groupby/pivot` overhead.
 
@@ -390,6 +387,10 @@ Return a dictionary with at least:
 -  `best_solution_summary` (optional but recommended)
 
 -  `message` (human-readable status)
+
+Current temporary debug fields (ndarray control exports):
+- `debug_baseline_matrix_file`
+- `debug_initial_candidate_matrix_file`
 
   
 

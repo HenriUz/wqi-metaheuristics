@@ -31,7 +31,7 @@ The `context` object includes:
 
 What `objective_state_nd` is:
 - One-time compiled state created before the optimization loop.
-- Contains sequential hex indexing, base indicator matrix, dimension mapping, and precompiled source-target `alpha` impacts.
+- Contains sequential hex indexing, `baseline_matrix`, dimension mapping, and precompiled source-target `alpha` impacts.
 - Lets `objective_function(candidate_matrix=..., objective_state=...)` run with ndarray operations only in the hot loop.
 
 Plain-language note:
@@ -61,6 +61,18 @@ This objective:
 - updates indicators using ndarray operations only,
 - recalculates CRITIC + IQC,
 - returns `objective_value = sum(IQC)` and `optimization_direction = "maximize"`.
+
+## Debug Matrix Exports (temporary control)
+Each method currently writes two `.txt` files per run under:
+- `metaheuristics/debug_nd_arrays/`
+
+Saved files:
+- `*_baseline_matrix.txt` (baseline ndarray compatible with walkability indicators)
+- `*_initial_candidate_matrix.txt` (initial solution matrix converted to ndarray)
+
+Returned fields in method result:
+- `debug_baseline_matrix_file`
+- `debug_initial_candidate_matrix_file`
 
 ## Minimal method skeleton
 ```python

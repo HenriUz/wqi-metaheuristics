@@ -133,11 +133,11 @@ pco212-metaheuristics/
 
 -  `recalculate_iqc_and_critic(df_final)`
 
--  `objective_function(...)` (official objective entry point: dataframe mode and ndarray mode)
+-  `objective_function(candidate_matrix=..., objective_state=...)` (official objective entry point, ndarray only)
 
 -  `build_objective_state_nd(df_walkability, df_hex_time_matrix, candidate_dimensions)` (one-time precompilation to ndarray state)
 
--  `evaluate_candidate_matrix_nd(candidate_matrix, objective_state)` (compatibility wrapper for ndarray objective calls)
+-  `evaluate_candidate_matrix_nd(candidate_matrix, objective_state)` (optional compatibility wrapper for ndarray objective calls)
 
 -  `metaheuristics/core/types.py`: shared dataclass context for method implementations.
 

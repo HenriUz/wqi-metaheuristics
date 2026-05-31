@@ -17,7 +17,6 @@ from .evaluation import (
     evaluate_candidate_matrix_nd,
     get_available_dimensions,
     objective_function,
-    objective_function_with_time_nd,
     recalculate_iqc_and_critic,
     validate_hex_time_matrix,
 )
@@ -42,7 +41,6 @@ __all__ = [
     'get_available_dimensions',
     'load_seeds',
     'objective_function',
-    'objective_function_with_time_nd',
     'recalculate_iqc_and_critic',
     'random_budget_allocation',
     'random_spatial_budget_allocation',

@@ -227,43 +227,20 @@ def recalculate_iqc_and_critic(df_final: pd.DataFrame) -> Tuple[pd.DataFrame, pd
     return df_updated, critic_weights
 
 
-def _objective_function_from_dataframe(df_final: pd.DataFrame) -> Dict[str, object]:
-    """Legacy dataframe objective: recompute IQC then return global sum."""
-    df_updated, critic_weights = recalculate_iqc_and_critic(df_final)
-
-    objective_value = float(df_updated['IQC'].sum())
-
-    return {
-        'objective_metric': 'sum_iqc',
-        'objective_value': objective_value,
-        'optimization_direction': 'maximize',
-        'df_final_updated': df_updated,
-        'critic_weights': critic_weights,
-    }
-
-
-def objective_function(df_final: Optional[pd.DataFrame] = None,
-                       *,
-                       candidate_matrix: Optional[np.ndarray] = None,
-                       objective_state: Optional[ObjectiveStateND] = None) -> Dict[str, object]:
+def objective_function(*,
+                       candidate_matrix: np.ndarray,
+                       objective_state: ObjectiveStateND) -> Dict[str, object]:
     """
-    Official objective function entry point.
+    Official objective function entry point (ndarray only).
 
-    Supported inputs:
-    - dataframe mode: `objective_function(df_final=...)` or positional `objective_function(df_final)`
-    - ndarray mode: `objective_function(candidate_matrix=..., objective_state=...)`
+    Receives:
+    - candidate_matrix: proposed allocation matrix (n_hex, n_candidate_dimensions)
+    - objective_state: precompiled ObjectiveStateND
     """
-    if candidate_matrix is not None or objective_state is not None:
-        if candidate_matrix is None or objective_state is None:
-            raise ValueError("For ndarray objective, provide both candidate_matrix and objective_state.")
-        return _objective_function_from_candidate_matrix(
-            candidate_matrix=candidate_matrix,
-            objective_state=objective_state,
-        )
-
-    if df_final is None:
-        raise ValueError("df_final is required when candidate_matrix/objective_state are not provided.")
-    return _objective_function_from_dataframe(df_final)
+    return _objective_function_from_candidate_matrix(
+        candidate_matrix=candidate_matrix,
+        objective_state=objective_state,
+    )
 
 
 def build_objective_state_nd(df_walkability: pd.DataFrame,
@@ -499,22 +476,6 @@ def evaluate_candidate_matrix_nd(candidate_matrix: np.ndarray,
 
     Preferred public name is `objective_function(candidate_matrix=..., objective_state=...)`.
     """
-    return objective_function(
-        candidate_matrix=candidate_matrix,
-        objective_state=objective_state,
-    )
-
-
-def objective_function_with_time_nd(allocation_items: Iterable[Dict[str, object]],
-                                    objective_state: ObjectiveStateND) -> Dict[str, object]:
-    """
-    Convenience wrapper:
-    allocation list -> candidate ndarray -> low-overhead ndarray objective.
-    """
-    candidate_matrix = allocation_items_to_candidate_matrix(
-        allocation_items=allocation_items,
-        objective_state=objective_state,
-    )
     return objective_function(
         candidate_matrix=candidate_matrix,
         objective_state=objective_state,

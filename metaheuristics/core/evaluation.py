@@ -228,19 +228,32 @@ def recalculate_iqc_and_critic(df_final: pd.DataFrame) -> Tuple[pd.DataFrame, pd
 
 
 def objective_function(*,
-                       candidate_matrix: np.ndarray,
-                       objective_state: ObjectiveStateND) -> Dict[str, object]:
+                       final_indicator_matrix: np.ndarray) -> Dict[str, object]:
     """
-    Official objective function entry point (ndarray only).
+    Official objective function entry point.
 
-    Receives:
-    - candidate_matrix: proposed allocation matrix (n_hex, n_candidate_dimensions)
-    - objective_state: precompiled ObjectiveStateND
+    This function only evaluates a ready indicator matrix:
+    - recalculates CRITIC weights,
+    - recalculates IQC,
+    - returns sum(IQC) as objective value.
     """
-    return _objective_function_from_candidate_matrix(
-        candidate_matrix=candidate_matrix,
-        objective_state=objective_state,
-    )
+    indicator_matrix = np.asarray(final_indicator_matrix, dtype=np.float64)
+    if indicator_matrix.ndim != 2:
+        raise ValueError("final_indicator_matrix must be a 2D ndarray.")
+    if indicator_matrix.shape[0] == 0 or indicator_matrix.shape[1] == 0:
+        raise ValueError("final_indicator_matrix must have at least one row and one column.")
+
+    critic_weights = _compute_critic_weights_numpy(indicator_matrix)
+    iqc_values = _compute_iqc_numpy(indicator_matrix, critic_weights=critic_weights)
+    objective_value = float(iqc_values.sum())
+
+    return {
+        'objective_metric': 'sum_iqc',
+        'objective_value': objective_value,
+        'optimization_direction': 'maximize',
+        'critic_weights': critic_weights,
+        'iqc_values': iqc_values,
+    }
 
 
 def build_objective_state_nd(df_walkability: pd.DataFrame,
@@ -251,7 +264,9 @@ def build_objective_state_nd(df_walkability: pd.DataFrame,
     Precompile numeric structures used by the ndarray objective function.
 
     This should run once per optimization execution. Candidate evaluation
-    should then use `objective_function(candidate_matrix=..., objective_state=...)`.
+    should then use:
+    1) `build_final_indicator_matrix_nd(candidate_matrix=..., objective_state=...)`
+    2) `objective_function(final_indicator_matrix=...)`
     """
     if df_walkability is None or df_walkability.empty:
         raise ValueError("df_walkability is empty.")
@@ -431,9 +446,14 @@ def _compute_iqc_numpy(indicator_matrix: np.ndarray,
     return np.round(iqc_values, 4)
 
 
-def _objective_function_from_candidate_matrix(candidate_matrix: np.ndarray,
-                                              objective_state: ObjectiveStateND) -> Dict[str, object]:
-    """Ndarray objective: apply impacts, recompute CRITIC+IQC, return global IQC sum."""
+def build_final_indicator_matrix_nd(candidate_matrix: np.ndarray,
+                                    objective_state: ObjectiveStateND) -> np.ndarray:
+    """
+    Build final indicator matrix from baseline + propagated candidate impact.
+
+    This function does not evaluate CRITIC/IQC; it only applies the
+    source-target alpha propagation and returns the updated indicator matrix.
+    """
     candidate_array = np.asarray(candidate_matrix, dtype=np.float64)
 
     n_hex = len(objective_state.h3_ids)
@@ -453,30 +473,22 @@ def _objective_function_from_candidate_matrix(candidate_matrix: np.ndarray,
     delta_by_target = np.zeros((n_hex, n_dims), dtype=np.float64)
     np.add.at(delta_by_target, objective_state.target_indices, weighted_rows)
 
-    indicator_matrix = objective_state.baseline_matrix.copy()
-    indicator_matrix[:, objective_state.candidate_to_indicator_indices] += delta_by_target
-
-    critic_weights = _compute_critic_weights_numpy(indicator_matrix)
-    iqc_values = _compute_iqc_numpy(indicator_matrix, critic_weights=critic_weights)
-    objective_value = float(iqc_values.sum())
-
-    return {
-        'objective_metric': 'sum_iqc',
-        'objective_value': objective_value,
-        'optimization_direction': 'maximize',
-        'critic_weights': critic_weights,
-        'applied_allocation_size': int(np.count_nonzero(candidate_array)),
-    }
+    final_indicator_matrix = objective_state.baseline_matrix.copy()
+    final_indicator_matrix[:, objective_state.candidate_to_indicator_indices] += delta_by_target
+    return final_indicator_matrix
 
 
 def evaluate_candidate_matrix_nd(candidate_matrix: np.ndarray,
                                  objective_state: ObjectiveStateND) -> Dict[str, object]:
     """
-    Compatibility wrapper for ndarray objective calls.
-
-    Preferred public name is `objective_function(candidate_matrix=..., objective_state=...)`.
+    Compatibility wrapper:
+    candidate_matrix -> final_indicator_matrix -> objective_function.
     """
-    return objective_function(
-        candidate_matrix=candidate_matrix,
+    candidate_array = np.asarray(candidate_matrix, dtype=np.float64)
+    final_indicator_matrix = build_final_indicator_matrix_nd(
+        candidate_matrix=candidate_array,
         objective_state=objective_state,
     )
+    eval_result = objective_function(final_indicator_matrix=final_indicator_matrix)
+    eval_result['applied_allocation_size'] = int(np.count_nonzero(candidate_array))
+    return eval_result

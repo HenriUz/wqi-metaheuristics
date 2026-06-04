@@ -29,7 +29,8 @@ class Particle():
 def generate_initial_swarm(
     size: int,
     budget: int,
-    baseline: npt.NDArray[np.uint8],
+    n_hex: int,
+    n_dim: int,
     objective_state_nd: ObjectiveStateND
 ) -> tuple[npt.NDArray[np.object_], npt.NDArray[np.uint8]]:
     """
@@ -40,17 +41,16 @@ def generate_initial_swarm(
     Args:
         size (int): Swarm size.
         budget (int): Limitation on the number of allocations.
-        baseline (NDArray[uint8]): Current status of allocations.
+        n_hex (int): Number of hexagons.
+        n_dim (int): Number of dimensions.
         objective_state_nd (ObjectiveStateND): Required metadata.
     
     Returns:
-        swarm (tuple[NDArray[object_], NDArray[uint8]]): Particles and allocations.
+        swarm (tuple[NDArray[object], NDArray[uint8]]): Particles and allocations.
     """
-
-    n_hex, n_dim = baseline.shape
     
     swarm = np.empty(size, dtype = Particle)
-    allocations = np.zeros((size, n_hex, n_dim), dtype = np.uint8)
+    interventions = np.zeros((size, n_hex, n_dim), dtype = np.uint8)
 
     for i in range(size):
         particle = Particle(
@@ -64,22 +64,22 @@ def generate_initial_swarm(
         particle.pbest = particle.x.copy()
         for e in particle.x:
             hs, ds = np.divmod(e, n_dim)
-            allocations[i][hs][ds] = 1
+            interventions[i][hs][ds] = 1
             particle.number += 1
 
         if particle.number > budget:
             particle.objective = 0
         else:
             matrix = build_final_indicator_matrix_nd(
-                candidate_matrix = allocations[i],
+                candidate_matrix = interventions[i],
                 objective_state  = objective_state_nd
             )
-            particle.objective = objective_function(final_indicator_matrix=matrix)
+            particle.objective = objective_function(final_indicator_matrix=matrix)["objective_value"]
 
         particle.pbest_objective = particle.objective
         swarm[i] = particle
 
-    return swarm, allocations
+    return swarm, interventions
 
 def scalar_multiplication(
     scalar: float,
@@ -92,7 +92,7 @@ def scalar_multiplication(
 
     Args:
         scalar (float): Scaling factor in [0, 1].
-        velocity (set[tuple[str, int]]): Set of (operator, aisle) operations.
+        velocity (set[tuple[str, int]]): Set of (operator, allocation) operations.
     
     Returns:
         subset (set[tuple[str, int]]): Randomly sampled subset of the velocity.
@@ -118,7 +118,7 @@ def difference_in_positions(
         current (set[int]): Position to be transformed.
 
     Returns:
-        velocity (set[tuple[str, int]]): Set of (operator, aisle) operations. 
+        velocity (set[tuple[str, int]]): Set of (operator, allocation) operations. 
     """
     
     additions = {("+", aisle) for aisle in target  - current}
@@ -159,24 +159,28 @@ def k_tournament_selection(
     objective_state_nd: ObjectiveStateND
 ) -> set[tuple[str, int]]:
     """
-    Greedily selects `n_to_add` aisles from `candidates` using tournament selection.
+    Greedily selects `n_to_add` allocations from `candidates` using tournament selection.
 
     For each slot, `k` candidates are sampled and the one that best improves the objective is chosen.
 
     Args:
-        problem (Problem): Dataset information.
-        particle (SetParticle): Current particle.
-        candidates (set[int]): Aisles not present in `x union pbest union G`.
-        n_to_add (int): Number of aisles to select.
+        candidates (set[int]): Allocations not present in `x union pbest union gbest`.
+        n_to_add (int): Number of allocations to select.
         k (int): Tournament size.
+        budget (int): Limitation on the number of allocations.
+        number (int): Number of allocations for the current particle.
+        intervention (NDArray[uint8]): Particle allocation matrix.
+        objective_state_nd (ObjectiveStateND): Required metadata.
     
     Returns:
-        additions (set[tuple[str, int]]): Addition operations for the selected aisles.
+        additions (set[tuple[str, int]]): Addition operations for the selected allocations.
     """
     
     additions = set()
     remaining = sorted(candidates)
-    _, n_dim  = intervention.shape
+
+    running  = intervention.copy()
+    _, n_dim = intervention.shape
 
     for _ in range(n_to_add):
         length = len(remaining)
@@ -196,14 +200,15 @@ def k_tournament_selection(
             if number + 1 > budget:
                 objective = 0
             else:
-                intervention[hs][ds] = 1
-                objective = objective_function(
-                    candidate_matrix = intervention,
+                running[hs][ds] = 1
+                matrix = build_final_indicator_matrix_nd(
+                    candidate_matrix = running,
                     objective_state  = objective_state_nd
-                )["objective_value"]
-                intervention[hs][ds] = 0
+                )
+                objective = objective_function(final_indicator_matrix=matrix)["objective_value"]
+                running[hs][ds] = 0
 
-            if objective >= best_objective:
+            if objective > best_objective:
                 best_allocation = allocation
                 best_objective  = objective
 
@@ -212,7 +217,7 @@ def k_tournament_selection(
         
         # Commit the selected aisle so the next round evaluates on top of it.
         hs, ds = np.divmod(best_allocation, n_dim)
-        intervention[hs][ds] = 1
+        running[hs][ds] = 1
         number += 1
 
     return additions
@@ -222,14 +227,14 @@ def removal_of_elements(
     n_to_remove: int
 ) -> set[tuple[str, int]]:
     """
-    Randomly selects `n_to_remove` aisles from the consensus intersection to remove.
+    Randomly selects `n_to_remove` allocations from the consensus intersection to remove.
     
     Args:
-        consensus_set (set[int]): Aisles present in `x intersect pbest intersect G`.
-        n_ro_remove (int): Number of aisles to remove.
+        consensus_set (set[int]): Allocations present in `x intersect pbest intersect gbest`.
+        n_ro_remove (int): Number of allocations to remove.
     
     Returns:
-        removals (set[tuple[str, int]]): Removal operations for the selected aisles.
+        removals (set[tuple[str, int]]): Removal operations for the selected allocations.
     """
     
     selected = sample(sorted(consensus_set), k=n_to_remove)
@@ -237,26 +242,23 @@ def removal_of_elements(
 
 def run_pso(context: MetaheuristicContext) -> dict:
     """
-    PSO baseline evaluation over the shared spatial-time objective.
+    Set-Based PSO for walkability problem. The algorithm performs binary operations; that is, it either adds exactly one dimension of a given type to a hexagon, or it adds none.
+    
+    Furthermore, the set of items available for selection is considered to be the number of hexagons multiplied by the number of POIs. The `divmod` operation is used to map a value from this set to a position in the intervention matrix.
+
+    The parameters `c1` and `c2` must be in [0, 1] (scalar multipliers for set velocities). `c3` and `c4` control the expected number of random additions and removals; they are implicitly bounded by the relevant set sizes inside the called functions.
+
+    Args:
+        context (MetaheuristicContext): Required metadata.
     """
     
-    if not context.allocations or not context.objective_state_nd:
+    if not context.objective_state_nd:
         return {
             'method_code': context.method_code,
             'method_name': context.method_name,
             'status': 'error',
-            'message': 'No allocation candidates available.',
+            'message': 'Required metadata is missing.',
         }
-    
-    """
-    Estratégias:
-    - Na criação do enxame limitar a quantidade para ser menor do que o budget.
-    - Usar o baseline como melhor global.
-    
-    Estruturas:
-    - Allocations: matriz de 3 dimensões (partícula, hexágonos, dimensões), representando as alocação para cada partícula.
-    - Swarm: lista com as informações da partícula (Particle).
-    """
 
     seed(context.seeds[0])
 
@@ -273,18 +275,14 @@ def run_pso(context: MetaheuristicContext) -> dict:
     n_hex    = len(context.source_hex_ids)
     n_dim    = len(context.dimensions)
     budget   = context.budget
-    baseline = context.objective_state_nd.baseline_matrix[:, :n_dim]
     universe = set(range(n_hex * n_dim))
 
     # Initializing swarm.
-    swarm, allocations = generate_initial_swarm(size, budget, baseline, context.objective_state_nd)
+    swarm, allocations = generate_initial_swarm(size, budget, n_hex, n_dim, context.objective_state_nd)
 
     # Searching for the best global.
     best_position  = set()
-    best_objective = objective_function(
-        candidate_matrix=baseline,
-        objective_state=context.objective_state_nd
-    )["objective_value"]
+    best_objective = context.baseline_iqc_total
     
     print(f"DEBUG: {best_objective}")
 
@@ -318,7 +316,7 @@ def run_pso(context: MetaheuristicContext) -> dict:
                 k,
                 budget,
                 particle.number,
-                baseline + allocations[i],
+                allocations[i],
                 context.objective_state_nd
             )
 
@@ -332,12 +330,15 @@ def run_pso(context: MetaheuristicContext) -> dict:
             velocity = cognitive_velocity | social_velocity | random_additions | random_removals
 
             for op, allocation in velocity:
+                hs, ds = np.divmod(allocation, n_dim)
                 if op == "+":
                     particle.number += 1
                     particle.x.add(allocation)
+                    allocations[i][hs][ds] = 1
                 else:
                     particle.number -= 1
                     particle.x.remove(allocation)
+                    allocations[i][hs][ds] = 0
         
         for i in range(size):
             particle = swarm[i]
@@ -345,21 +346,21 @@ def run_pso(context: MetaheuristicContext) -> dict:
             if particle.number > budget:
                 particle.objective = 0
             else:
-                particle.objective = objective_function(
-                    candidate_matrix = baseline + allocations[i],
+                matrix = build_final_indicator_matrix_nd(
+                    candidate_matrix = allocations[i],
                     objective_state  = context.objective_state_nd
-                )["objective_value"]
+                )
+                particle.objective = objective_function(final_indicator_matrix=matrix)["objective_value"]
 
             if particle.objective >= particle.pbest_objective:
                 particle.pbest           = particle.x.copy()
                 particle.pbest_objective = particle.objective
 
             if particle.objective >= best_objective:
-                best_position  = particle.pbest.copy()
+                best_position  = particle.x.copy()
                 best_objective = particle.objective
                 
-    print(f"DEBUG: {best_objective}")
-    print(len(best_position))
+    print(f"DEBUG: {best_objective} - {len(best_position)}")
 
     return {
         'method_code': context.method_code,

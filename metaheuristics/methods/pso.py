@@ -252,12 +252,20 @@ def run_pso(context: MetaheuristicContext) -> dict:
         context (MetaheuristicContext): Required metadata.
     """
     
+    if not context.baseline_iqc_total:
+        return {
+            "method_code": context.method_code,
+            "method_name": context.method_name,
+            "status": "error",
+            "message": "baseline_iqc_total is required for PSO execution."
+        }
+
     if not context.objective_state_nd:
         return {
-            'method_code': context.method_code,
-            'method_name': context.method_name,
-            'status': 'error',
-            'message': 'Required metadata is missing.',
+            "method_code": context.method_code,
+            "method_name": context.method_name,
+            "status": "error",
+            "message": "objective_state_nd is required for PSO execution."
         }
 
     seed(context.seeds[0])
@@ -344,7 +352,7 @@ def run_pso(context: MetaheuristicContext) -> dict:
             particle = swarm[i]
 
             if particle.number > budget:
-                particle.objective = 0
+                particle.objective = 0.0
             else:
                 matrix = build_final_indicator_matrix_nd(
                     candidate_matrix = allocations[i],

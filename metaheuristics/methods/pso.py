@@ -6,8 +6,8 @@ from ..core import build_final_indicator_matrix_nd, objective_function
 from ..core.types import ObjectiveStateND, MetaheuristicContext
 from dataclasses import dataclass
 from math import floor
+from numpy.random import default_rng, Generator
 from pathlib import Path
-from random import random, sample, seed
 from time import perf_counter
 
 @dataclass
@@ -16,11 +16,11 @@ class Particle():
     Represents a particle in the swarm, containing essential and auxiliary attributes.
 
     Attributes:
-        x (set[int]): Selected allocations.
+        x (set[int]): Selected POIs.
         objective (float): Value of the objective function.
-        number (int): Number of allocations.
-        pbest (set[int]): Best allocations found.
-        pbest_obj (float): Value of the objective function for the best allocations.
+        number (int): Number of selected POIs.
+        pbest (set[int]): Best POIs found.
+        pbest_obj (float): Value of the objective function for the best POIs.
     """
     
     x:         set[int]
@@ -33,11 +33,12 @@ def generate_initial_swarm(
     size: int,
     budget: int,
     n_hex: int,
-    n_dim: int,
-    objective_state_nd: ObjectiveStateND
+    n_pois: int,
+    objective_state_nd: ObjectiveStateND,
+    rng: Generator
 ) -> tuple[npt.NDArray[np.object_], npt.NDArray[np.uint8]]:
     """
-    Populates the swarm with randomly generated particles. Each particle has a 50% chance of selecting an allocation
+    Populates the swarm with randomly generated particles. Each particle has a 50% chance of selecting an POI.
 
     Returns an array containing all the particles, and a 3-dimensional matrix. 
     The first dimension represents a particle, and the other two dimensions are the binary allocation matrix for that particle.
@@ -50,46 +51,48 @@ def generate_initial_swarm(
         size (int): Swarm size.
         budget (int): Limitation on the number of allocations.
         n_hex (int): Number of hexagons.
-        n_dim (int): Number of dimensions.
+        n_pois (int): Number of dimensions.
         objective_state_nd (ObjectiveStateND): Required metadata.
+        rng (Generator): Random number generator.
     
     Returns:
         swarm (tuple[NDArray[object], NDArray[uint8]]): Particles and allocations.
     """
     
     swarm = np.empty(size, dtype = Particle)
-    interventions = np.zeros((size, n_hex, n_dim), dtype = np.uint8)
+    allocations = np.zeros((size, n_hex, n_pois), dtype = np.uint8)
 
     for i in range(size):
         particle = Particle(
-            x          = {e for e in range(n_hex * n_dim) if random() <= 0.5},
+            x          = {poi for poi in range(n_hex * n_pois) if rng.random() <= 0.5},
             objective  = 0.0,
             number     = 0,
             pbest      = set(),
             pbest_obj  = 0.0
         )
 
-        for e in particle.x:
-            hs, ds = np.divmod(e, n_dim)
-            interventions[i][hs][ds] = 1
+        for poi in particle.x:
+            hs, ds = np.divmod(poi, n_pois)
+            allocations[i][hs][ds] = 1
             particle.number += 1
 
         if particle.number > budget:
             particle.objective = 0
         else:
             matrix = build_final_indicator_matrix_nd(
-                candidate_matrix = interventions[i],
+                candidate_matrix = allocations[i],
                 objective_state  = objective_state_nd
             )
             particle.objective = objective_function(final_indicator_matrix=matrix)["objective_value"]
 
         swarm[i] = particle
 
-    return swarm, interventions
+    return swarm, allocations
 
 def scalar_multiplication(
     scalar: float,
-    velocity: set[tuple[str, int]]
+    velocity: set[tuple[str, int]],
+    rng: Generator
 ) -> set[tuple[str, int]]:
     """
     Multiplies a velocity by a scalar value.
@@ -98,7 +101,8 @@ def scalar_multiplication(
 
     Args:
         scalar (float): Scaling factor in [0, 1].
-        velocity (set[tuple[str, int]]): Set of (operator, allocation) operations.
+        velocity (set[tuple[str, int]]): Set of (operator, POI) operations.
+        rng (Generator): Random number generator.
     
     Returns:
         subset (set[tuple[str, int]]): Randomly sampled subset of the velocity.
@@ -109,7 +113,11 @@ def scalar_multiplication(
         return set()
     
     k = floor(scalar * len(velocity))
-    return set(sample(sorted(velocity), k=k))
+    
+    samples = sorted(velocity)
+    indexes = rng.choice(len(samples), size = k, replace = False)
+    
+    return {samples[i] for i in indexes}
 
 def difference_in_positions(
     target: set[int],
@@ -126,16 +134,17 @@ def difference_in_positions(
         current (set[int]): Position to be transformed.
 
     Returns:
-        velocity (set[tuple[str, int]]): Set of (operator, allocation) operations. 
+        velocity (set[tuple[str, int]]): Set of (operator, POI) operations. 
     """
     
-    additions = {("+", aisle) for aisle in target  - current}
-    removals  = {("-", aisle) for aisle in current - target}
+    additions = {("+", poi) for poi in target  - current}
+    removals  = {("-", poi) for poi in current - target}
     return additions | removals
 
 def number_of_elements(
     beta: float,
-    set: set[int]
+    set: set[int],
+    rng: Generator
 ) -> int:
     """
     Returns the number of elements to operate on in a velocity update step.
@@ -148,13 +157,14 @@ def number_of_elements(
     Args:
         beta (float): Expected number of elements.
         set (set[int]): Set whose size serves as the upper bound.
+        rng (Generator): Random number generator.
     
     Returns:
         n_elements (int): Number of elements to operate on.
     """
     
     count = floor(beta)
-    if random() < beta - count:
+    if rng.random() < beta - count:
         count += 1
     
     length = len(set)
@@ -168,49 +178,52 @@ def k_tournament_selection(
     k: int,
     budget: int,
     number: int,
-    intervention: npt.NDArray[np.uint8],
-    objective_state_nd: ObjectiveStateND
+    allocation: npt.NDArray[np.uint8],
+    objective_state_nd: ObjectiveStateND,
+    rng: Generator
 ) -> set[tuple[str, int]]:
     """
-    Greedily selects `n_to_add` allocations from `candidates` using tournament selection.
+    Greedily selects `n_to_add` POIs from `candidates` using tournament selection.
 
     For each slot, `k` candidates are sampled and the one that best improves the objective is chosen.
 
     Args:
-        candidates (set[int]): Allocations not present in `x union pbest union gbest`.
-        n_to_add (int): Number of allocations to select.
+        candidates (set[int]): POIs not present in `x union pbest union gbest`.
+        n_to_add (int): Number of POIs to select.
         k (int): Tournament size.
         budget (int): Limitation on the number of allocations.
-        number (int): Number of allocations for the current particle.
-        intervention (NDArray[uint8]): Particle allocation matrix.
+        number (int): Number of POIs for the current particle.
+        allocation (NDArray[uint8]): Particle allocation matrix.
         objective_state_nd (ObjectiveStateND): Required metadata.
-    
+        rng (Generator): Random number generator.
+        
     Returns:
-        additions (set[tuple[str, int]]): Addition operations for the selected allocations.
+        additions (set[tuple[str, int]]): Addition operations for the selected POIs.
     """
     
     additions = set()
     remaining = sorted(candidates)
+    length    = len(remaining)
 
-    running  = intervention.copy()
-    _, n_dim = intervention.shape
+    running  = allocation.copy()
+    r_number = number # Running number.
+    _, n_pois = allocation.shape
 
     for _ in range(n_to_add):
-        length = len(remaining)
         if k < length:
             tournament_size = k
         else:
             tournament_size = length
         
-        contestants = sample(remaining, tournament_size)
+        indexes = rng.choice(length, size = tournament_size, replace = False)
         
-        best_allocation = -1
-        best_objective  = -1
+        best_poi       = -1
+        best_objective = -1
         
-        for allocation in contestants:
-            hs, ds = np.divmod(allocation, n_dim)
+        for i in indexes:
+            hs, ds = np.divmod(remaining[i], n_pois)
 
-            if number + 1 > budget:
+            if r_number + 1 > budget:
                 objective = 0
             else:
                 running[hs][ds] = 1
@@ -222,36 +235,41 @@ def k_tournament_selection(
                 running[hs][ds] = 0
 
             if objective > best_objective:
-                best_allocation = allocation
-                best_objective  = objective
+                best_poi       = remaining[i]
+                best_objective = objective
 
-        additions.add(("+", best_allocation))
-        remaining.remove(best_allocation)
-        
-        # Commit the selected aisle so the next round evaluates on top of it.
-        hs, ds = np.divmod(best_allocation, n_dim)
+        additions.add(("+", best_poi))
+        remaining.remove(best_poi)
+        length -= 1
+
+        # Commit the selected POI for the next round.
+        hs, ds = np.divmod(best_poi, n_pois)
         running[hs][ds] = 1
-        number += 1
+        r_number += 1
 
     return additions
 
 def removal_of_elements(
     consensus: set[int],
-    n_to_remove: int
+    n_to_remove: int,
+    rng: Generator
 ) -> set[tuple[str, int]]:
     """
-    Randomly selects `n_to_remove` allocations from the `consensus` to remove.
+    Randomly selects `n_to_remove` POIs from the `consensus` to remove.
     
     Args:
-        consensus (set[int]): Allocations present in `x intersect pbest intersect gbest`.
-        n_ro_remove (int): Number of allocations to remove.
+        consensus (set[int]): POIs present in `x intersect pbest intersect gbest`.
+        n_ro_remove (int): Number of POIs to remove.
+        rng (Generator): Random number generator.
     
     Returns:
-        removals (set[tuple[str, int]]): Removal operations for the selected allocations.
+        removals (set[tuple[str, int]]): Removal operations for the selected POIs.
     """
-    
-    selected = sample(sorted(consensus), k=n_to_remove)
-    return {("-", aisle) for aisle in selected}
+
+    samples = sorted(consensus)
+    indexes = rng.choice(len(samples), size = n_to_remove, replace = False)
+
+    return {("-", samples[i]) for i in indexes}
 
 def sbpso(
     context: MetaheuristicContext,
@@ -261,30 +279,43 @@ def sbpso(
     c2: float,
     c3: float,
     c4: float,
-    k: int
+    k: int,
+    seed: int
 ) -> tuple[list[float], float, npt.NDArray[np.uint8]]:
     """
     Set-Based PSO for walkability problem. The algorithm performs binary operations; 
     that is, it either adds exactly one dimension of a given type to a hexagon, or it adds none.
     
-    Furthermore, the set of items available for selection is considered to be the number of hexagons multiplied by the number of POIs. 
+    Furthermore, the set of POIs available for selection is considered to be the number of hexagons multiplied by the number of POIs. 
     The `divmod` operation is used to map a value from this set to a position in the intervention matrix.
     
+    Args:
+        context (MetaheuristicContext): Required metadata.
+        size (int): Swarm size.
+        iterations (int): Number of iterations.
+        c1 (float): Cognitive acceleration coefficient (in [0, 1]).
+        c2 (float): Social acceleration coefficient (in [0, 1]).
+        c3 (float): Random addition coefficient.
+        c4 (float): Random removal coefficient.
+        k (int): Tournament size for k-tournament selection.
+        seed (int): Randomness seed.
+        
     Returns:
         data (tuple[list[float], float, NDArray[uint8]]): A tuple containing a list with the global best value for each iteration, 
         the total execution time, and the gbest's proposed matrix in the last iteration.
     """
 
     start = perf_counter()
-    
+    rng = default_rng(seed)
+
     # Parameters of the problem.
     n_hex    = len(context.source_hex_ids)
-    n_dim    = len(context.dimensions)
+    n_pois    = len(context.dimensions)
     budget   = context.budget
-    universe = set(range(n_hex * n_dim))
+    universe = set(range(n_hex * n_pois))
 
     # Initializing swarm.
-    swarm, allocations = generate_initial_swarm(size, budget, n_hex, n_dim, context.objective_state_nd)
+    swarm, allocations = generate_initial_swarm(size, budget, n_hex, n_pois, context.objective_state_nd, rng)
 
     gbest     = set()
     gbest_obj = context.baseline_iqc_total
@@ -309,46 +340,50 @@ def sbpso(
 
             # Cognitive component: pull toward personal best.
             cognitive_velocity = scalar_multiplication(
-                c1 * random(),
-                difference_in_positions(particle.pbest, particle.x)
+                c1 * rng.random(),
+                difference_in_positions(particle.pbest, particle.x),
+                rng
             )
 
             # Social component: pull toward global best.
             social_velocity = scalar_multiplication(
-                c2 * random(),
-                difference_in_positions(gbest, particle.x)
+                c2 * rng.random(),
+                difference_in_positions(gbest, particle.x),
+                rng
             )
 
-            # Exploration: add aisles absent from all three reference sets.
-            external_aisles  = universe - (particle.x | particle.pbest | gbest)
+            # Exploration: add POIs absent from all three reference sets.
+            external_pois  = universe - (particle.x | particle.pbest | gbest)
             random_additions = k_tournament_selection(
-                external_aisles,
-                number_of_elements(c3 * random(), external_aisles),
+                external_pois,
+                number_of_elements(c3 * rng.random(), external_pois, rng),
                 k,
                 budget,
                 particle.number,
                 allocations[i],
-                context.objective_state_nd
+                context.objective_state_nd,
+                rng
             )
 
-            # Diversity: remove aisles present in all three reference sets.
-            consensus_aisles = particle.x & particle.pbest & gbest
+            # Diversity: remove POIs present in all three reference sets.
+            consensus_pois = particle.x & particle.pbest & gbest
             random_removals  = removal_of_elements(
-                consensus_aisles,
-                number_of_elements(c4 * random(), consensus_aisles)
+                consensus_pois,
+                number_of_elements(c4 * rng.random(), consensus_pois, rng),
+                rng
             )
 
             # Update the position.
             velocity = cognitive_velocity | social_velocity | random_additions | random_removals
-            for op, allocation in velocity:
-                hs, ds = np.divmod(allocation, n_dim)
+            for op, poi in velocity:
+                hs, ds = np.divmod(poi, n_pois)
                 if op == "+":
                     particle.number += 1
-                    particle.x.add(allocation)
+                    particle.x.add(poi)
                     allocations[i][hs][ds] = 1
                 else:
                     particle.number -= 1
-                    particle.x.remove(allocation)
+                    particle.x.remove(poi)
                     allocations[i][hs][ds] = 0
             
             # Update objective value.
@@ -364,16 +399,16 @@ def sbpso(
     end = perf_counter()
 
     # Building the gbest's proposed matrix.
-    gbest_matrix = np.zeros((n_hex, n_dim), dtype = np.uint8)
+    gbest_matrix = np.zeros((n_hex, n_pois), dtype = np.uint8)
     for e in gbest:
-        hs, ds = np.divmod(e, n_dim)
+        hs, ds = np.divmod(e, n_pois)
         gbest_matrix[hs][ds] = 1
 
     return objectives, (end - start), gbest_matrix
 
 def run_pso(
     context: MetaheuristicContext,
-    mode: int = 0,
+    mode: int = 1,
     size: int = 50,
     iterations: int = 600,
     c1: float = 0.9297,
@@ -386,7 +421,7 @@ def run_pso(
     Entry point for running the PSO. It serves as an interface for selecting the execution modes: single or benchmark.
 
     In single-run mode, the first random seed available in `context` is used, and the result of the method is returned. 
-    In benchmark mode, all seeds are used, and the best result is returned, but all others are saved in the `result` directory.
+    In benchmark mode, all seeds are used, and the best result is returned, but all others are saved in the `results` directory.
 
     Args:
         context (MetaheuristicContext): Required metadata.
@@ -415,11 +450,17 @@ def run_pso(
             "status": "error",
             "message": "objective_state_nd is required for PSO execution."
         }
+    
+    if not (0.0 <= c1 <= 1.0) or not (0.0 <= c2 <= 1.0):
+        return {
+            "method_code": context.method_code,
+            "method_name": context.method_name,
+            "status": "error",
+            "message": "c1 and c2 must be in the range from 0 to 1."
+        }
 
     if mode == 0:
-        seed(context.seeds[0])
-
-        objective, best_time, best_matrix = sbpso(context, size, iterations, c1, c2, c3, c4, k)
+        objective, best_time, best_matrix = sbpso(context, size, iterations, c1, c2, c3, c4, k, context.seeds[0])
         best_objective = objective[len(objective) - 1]
         
         message = "Single execution completed successfully."
@@ -431,7 +472,7 @@ def run_pso(
         result_path.mkdir(exist_ok = True)
         if not (result_path / "runs.csv").is_file():
             with open(result_path / "runs.csv", "a") as file:
-                file.write("walking profile, minimum value, maximum value, mean, standard deviation, mean time (s)")
+                file.write("walking profile, minimum value, maximum value, mean, standard deviation, mean time (s)\n")
 
         # The best value found across all runs.
         best_objective = 0.0
@@ -443,9 +484,7 @@ def run_pso(
         times      = []
 
         for s in context.seeds:
-            seed(s)
-
-            objective, time, matrix = sbpso(context, size, iterations, c1, c2, c3, c4, k)
+            objective, time, matrix = sbpso(context, size, iterations, c1, c2, c3, c4, k, s)
             obj = objective[len(objective) - 1]
             
             if obj >= best_objective:

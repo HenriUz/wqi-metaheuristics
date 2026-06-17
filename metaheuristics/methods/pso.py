@@ -469,7 +469,7 @@ def run_pso(
         local = "av_paulista"
         result_path = Path("results") / "pso" / local
 
-        result_path.mkdir(exist_ok = True)
+        result_path.mkdir(parents = True, exist_ok = True)
         if not (result_path / "runs.csv").is_file():
             with open(result_path / "runs.csv", "a") as file:
                 file.write("walking profile, minimum value, maximum value, mean, standard deviation, mean time (s)\n")

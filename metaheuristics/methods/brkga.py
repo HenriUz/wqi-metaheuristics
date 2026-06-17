@@ -14,7 +14,8 @@ from typing import cast
 @dataclass(repr = False, eq = False, match_args = False)
 class Solution:
     """
-    Contains the attributes of a BRKGA solution. Useful for sorting, since the genes and the objective value are grouped together.
+    Contains the attributes of a BRKGA solution.
+    Useful for sorting, since the genes and the objective value are grouped together.
 
     Attributes:
         genes (NDArray[float64]): Vector of random keys.
@@ -69,7 +70,7 @@ def generate_initial_population(
         n_pois (int): Number of dimensions.
         objective_state_nd (ObjectiveStateND): Required metadata.
         rng (Generator): Random number generator.
-        
+
     Returns:
         population (list[Solution]): Solutions.
     """
@@ -101,11 +102,12 @@ def brkga(
     BRKGA for walkability problem. There are no parallel populations or restart mechanisms. 
 
     The decoder sorts the vector of random keys and selects the top `k`, where `k` is the budget.
-    To do this, the algorithm maps all possible allocations to all hexagons in a range from 0 to `n_pois * n_hex - 1`.
+    To do this, the algorithm maps all possible allocations to all hexagons in a range from 0 to `n_hex * n_pois - 1`.
 
-    Thus, the size of the random key vector is `n_pois * n_hex`. 
+    Thus, the size of the random key vector is `n_hex * n_pois`.
 
-    Since the allocations are expected to be in a binary matrix of shape `(n_hex X n_pois)`, the dimension `d` is mapped to rows and columns in the matrix as follows:
+    Since the allocations are expected to be in a binary matrix of shape `(n_hex X n_pois)`,
+    the dimension `d` is mapped to rows and columns in the matrix as follows:
     - Row: `floor(d / n_pois)`
     - Column: `d % n_pois`
 
@@ -212,20 +214,12 @@ def run_brkga(
         inheritance (float): Child inheritance probability (> 0.5) [default: 0.7].
     """
 
-    if not context.baseline_iqc_total:
-        return {
-            "method_code": context.method_code,
-            "method_name": context.method_name,
-            "status": "error",
-            "message": "baseline_iqc_total is required for PSO execution."
-        }
-
     if not context.objective_state_nd:
         return {
             "method_code": context.method_code,
             "method_name": context.method_name,
             "status": "error",
-            "message": "objective_state_nd is required for PSO execution."
+            "message": "objective_state_nd is required for BRKGA execution."
         }
     
     if elite_size < 0.0 or mutant_size < 0.0:
@@ -254,7 +248,7 @@ def run_brkga(
         local = "av_paulista"
         result_path = Path("results") / "brkga" / local
 
-        result_path.mkdir(exist_ok = True)
+        result_path.mkdir(parents = True, exist_ok = True)
         if not (result_path / "runs.csv").is_file():
             with open(result_path / "runs.csv", "a") as file:
                 file.write("walking profile, minimum value, maximum value, mean, standard deviation, mean time (s)\n")

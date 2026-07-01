@@ -87,6 +87,7 @@ def generate_initial_population(
         solution.decoder(n_hex, n_pois, budget, objective_state_nd)
         population.append(solution)
 
+    population.sort(key = lambda x: x.objective, reverse = True)
     return population
 
 def brkga(
@@ -142,40 +143,37 @@ def brkga(
 
     # Initializing population.
     population = generate_initial_population(size, budget, n_hex, n_pois, context.objective_state_nd, rng)
+    next_population = [
+        Solution(genes=np.zeros(universe, dtype=np.float64), objective=0.0)
+        for _ in range(size)
+    ]
 
     objectives = [0.0] * iterations
     for i in range(iterations):
-        population.sort(key = lambda x: x.objective, reverse = True)
         objectives[i] = population[0].objective
 
-        next_population = cast(list[Solution], population[:elite] + [None] * (size - elite))
+        # Copy elite solutions to the next generation.
+        for e in range(elite):
+            next_population[e].genes[:]  = population[e].genes
+            next_population[e].objective = population[e].objective
 
-        # Randomly selects one parent from the elite partition and one parent from the population, and generates a new solution.
+        # Randomly selects one parent from the elite partition and one parent from the non-elite population
+        # and generates a new solution.
         for n in range(elite, normal):
             parent1 = rng.integers(0, elite)
-            parent2 = rng.integers(0, size)
+            parent2 = rng.integers(elite, normal)
 
             mask = rng.random(universe) <= inheritance
-
-            child = Solution(
-                genes     = np.where(mask, population[parent1].genes, population[parent2].genes),
-                objective = 0.0
-            )
-            
-            child.decoder(n_hex, n_pois, budget, context.objective_state_nd)
-            next_population[n] = child
+            next_population[n].genes[:] = np.where(mask, population[parent1].genes, population[parent2].genes)
+            next_population[n].decoder(n_hex, n_pois, budget, context.objective_state_nd)
 
         # Generates new random solutions.
         for m in range(normal, mutant):
-            child = Solution(
-                genes     = rng.random(universe),
-                objective = 0.0,
-            )
-
-            child.decoder(n_hex, n_pois, budget, context.objective_state_nd)
-            next_population[m] = child
-
-        population = next_population
+            next_population[m].genes[:] = rng.random(universe)
+            next_population[m].decoder(n_hex, n_pois, budget, context.objective_state_nd)
+            
+        population, next_population = next_population, population
+        population.sort(key = lambda x: x.objective, reverse = True)
 
     end = perf_counter()
 
@@ -192,11 +190,11 @@ def brkga(
 def run_brkga(
     context: MetaheuristicContext,
     mode: int = 0,
-    size: int = 50,
+    size: int = 100,
     iterations: int = 600,
-    elite_size: float = 0.20,
-    mutant_size: float = 0.07,
-    inheritance: float = 0.7
+    elite_size: float = 0.15,
+    mutant_size: float = 0.10,
+    inheritance: float = 0.50
 ) -> dict:
     """
     Entry point for running the BRKGA. It serves as an interface for selecting the execution modes: single or benchmark.
@@ -207,11 +205,11 @@ def run_brkga(
     Args:
         context (MetaheuristicContext): Required metadata.
         mode (int): Execution mode (0: single; 1: benchmark) [default: 0].
-        size (int): Population size [default: 50].
+        size (int): Population size [default: 100].
         iterations (int): Number of iterations [default: 600].
-        elite_size (float): Size of the elite partition (15% - 25%) [default: 0.20].
-        mutant_size (float): Size of the mutant partition (5% - 15%) [default: 0.07].
-        inheritance (float): Child inheritance probability (> 0.5) [default: 0.7].
+        elite_size (float): Size of the elite partition (10% - 25%) [default: 0.15].
+        mutant_size (float): Size of the mutant partition (10% - 30%) [default: 0.10].
+        inheritance (float): Child inheritance probability (50% - 80%) [default: 0.50].
     """
 
     if not context.objective_state_nd:
